@@ -142,6 +142,69 @@ The script uses `git hash-object` on combined status and diff output to detect i
 - Prevents infinite loops with `MAX_LOOPS`
 - Clear error messages and warnings
 
+## Testing
+
+A comprehensive test script is included to test all 4 review presets and features.
+
+### Running Tests
+
+```bash
+# Run tests in mock mode (tests script logic without Codex)
+./test-review-fix.sh --mock
+
+# Run tests with real Codex commands (requires Codex CLI and may incur costs)
+./test-review-fix.sh --real
+```
+
+### What's Tested
+
+The test suite covers:
+
+1. **Preset 1 - Branch/PR Review**: Tests reviewing changes against a base branch
+2. **Preset 2 - Uncommitted Changes**: Tests reviewing uncommitted working tree changes
+3. **Preset 3 - Specific Commit**: Tests reviewing a specific commit by SHA
+4. **Preset 4 - Custom Instructions**: Tests using custom review instructions from a file
+5. **Commit Message Resolution**: Tests custom commit message templates
+
+### Mock Mode
+
+Mock mode uses a simulated Codex CLI that:
+- Returns fake review results with session IDs
+- Simulates applying fixes by modifying files
+- Allows testing the script logic without API calls or costs
+- Validates all preset configurations and error handling
+
+### Real Mode
+
+Real mode runs actual Codex commands:
+- Tests integration with the real Codex CLI
+- Validates end-to-end functionality
+- **Warning**: Makes real API calls and may incur costs
+
+### Test Output
+
+The test script provides colored output:
+- Green: Tests passed
+- Red: Tests failed
+- Yellow: Warnings
+- Blue: Info messages
+
+Example output:
+```
+[INFO] Running test: Preset 1: Branch/PR Review
+[PASS] Preset 1: Branch/PR Review
+[INFO] Running test: Preset 2: Uncommitted Changes
+[PASS] Preset 2: Uncommitted Changes
+...
+================================
+Test Summary
+================================
+Passed: 5
+Failed: 0
+Total:  5
+================================
+```
+
 ## Troubleshooting
 
 ### "Working tree has uncommitted or untracked changes"
