@@ -506,15 +506,18 @@ EOF
   if [[ "${TEST_MODE}" == "--mock" ]]; then
     local output_log="/tmp/test-output-commit-msg-$$.log"
     if MAX_LOOPS=1 COMMIT_RULES_DOC=commit-rules.md bash "${REVIEW_FIX_SCRIPT}" 2>&1 | tee "${output_log}"; then
-      # Check if commit message template was used
-      if git log --oneline | grep -q "fix(auto): iteration 1 fixes" 2>/dev/null || \
-         grep -q "Commit conventions sourced from" "${output_log}"; then
+      local expected_message="fix(auto): iteration 1 fixes"
+      local latest_commit
+      latest_commit="$(git log -1 --pretty=%s 2>/dev/null || true)"
+
+      if [[ "${latest_commit}" == "${expected_message}" ]]; then
         log_success "Custom commit message format applied"
         return 0
-      else
-        log_warning "Could not verify custom commit message"
-        return 0
       fi
+
+      log_error "Expected commit message '${expected_message}' but found '${latest_commit:-<none>}'"
+      log_info "Runner output captured at ${output_log}"
+      return 1
     else
       log_warning "Commit message test may require real Codex"
       return 0
@@ -567,11 +570,11 @@ main() {
     exit 1
   fi
 
-  run_test "Preset 1: Branch/PR Review" test_preset_1_branch_review
-  run_test "Preset 2: Uncommitted Changes" test_preset_2_uncommitted
-  run_test "Preset 3: Specific Commit" test_preset_3_commit
-  run_test "Preset 4: Custom Instructions" test_preset_4_custom
-  run_test "Custom Commit Messages" test_commit_message_resolution
+  run_test "Preset 1: Branch/PR Review" test_preset_1_branch_review || true
+  run_test "Preset 2: Uncommitted Changes" test_preset_2_uncommitted || true
+  run_test "Preset 3: Specific Commit" test_preset_3_commit || true
+  run_test "Preset 4: Custom Instructions" test_preset_4_custom || true
+  run_test "Custom Commit Messages" test_commit_message_resolution || true
 
   echo
   print_summary
