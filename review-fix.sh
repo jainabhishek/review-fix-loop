@@ -1,6 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Show help message
+if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
+  cat << 'EOF'
+Codex Review-Fix Loop - Automated code review and fix automation
+
+USAGE:
+  ./review-fix.sh [--help]
+
+DESCRIPTION:
+  Automatically runs Codex code reviews and applies fixes in a loop until
+  no more issues are found or max iterations are reached.
+
+ENVIRONMENT VARIABLES:
+
+  Core Settings:
+    MAX_LOOPS=N                       Maximum review/fix iterations (default: 10)
+    CODEX_MODEL=<model>               Codex model to use (default: gpt-5-codex-high)
+    AUTOFIX_COMMIT_MESSAGE=<template> Custom commit message template with %d for iteration
+    COMMIT_RULES_DOC=<path>           Path to file defining autofix_commit_message:
+
+  Review Presets:
+    REVIEW_PRESET=<preset>            Type of review (1-4, pr, uncommitted, commit, custom)
+    REVIEW_BASE_BRANCH=<branch>       Required for preset 1 (PR/branch review)
+    REVIEW_COMMIT_SHA=<sha>           Required for preset 3 (commit review)
+    REVIEW_CUSTOM_INSTRUCTIONS=<text> Custom instructions for preset 4
+    REVIEW_CUSTOM_INSTRUCTIONS_FILE=<path> File with custom instructions for preset 4
+
+EXAMPLES:
+  # Run with default settings
+  ./review-fix.sh
+
+  # Review uncommitted changes
+  REVIEW_PRESET=uncommitted ./review-fix.sh
+
+  # Review changes against main branch
+  REVIEW_PRESET=pr REVIEW_BASE_BRANCH=main ./review-fix.sh
+
+  # Custom commit messages
+  AUTOFIX_COMMIT_MESSAGE="fix: iteration %d" ./review-fix.sh
+
+  # Extended loop with custom model
+  MAX_LOOPS=25 CODEX_MODEL=gpt-5-codex-high ./review-fix.sh
+
+For more information, see README.md
+EOF
+  exit 0
+fi
+
 # Max review/fix iterations (override with: MAX_LOOPS=20 ./review-fix.sh)
 MAX_LOOPS="${MAX_LOOPS:-10}"
 
@@ -21,13 +69,29 @@ REVIEW_CUSTOM_INSTRUCTIONS_FILE="${REVIEW_CUSTOM_INSTRUCTIONS_FILE:-}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5-codex-high}"
 export CODEX_MODEL
 
+# Prompt for applying fixes (configurable).
+APPLY_FIXES_PROMPT="${APPLY_FIXES_PROMPT:-Apply the fixes suggested above}"
+
 LAST_REVIEW_SESSION_ID=""
+
+# Validate MAX_LOOPS is a positive integer
+if ! [[ "${MAX_LOOPS}" =~ ^[0-9]+$ ]] || [[ "${MAX_LOOPS}" -lt 1 ]]; then
+  echo "Error: MAX_LOOPS must be a positive integer, got '${MAX_LOOPS}'." >&2
+  exit 1
+fi
+
+# Check if Codex CLI is installed
+if ! command -v codex &> /dev/null; then
+  echo "Error: 'codex' command not found. Please install Codex CLI." >&2
+  echo "Visit https://codex.com for installation instructions." >&2
+  exit 1
+fi
 
 ensure_clean_worktree() {
   local status_output
   status_output="$(git status --porcelain --untracked-files=all)"
   if [[ -n "${status_output}" ]]; then
-    echo "Working tree has uncommitted or untracked changes. Please commit or stash them before running this script." >&2
+    echo "Error: Working tree has uncommitted or untracked changes. Please commit or stash them before running this script." >&2
     exit 1
   fi
 }
@@ -64,12 +128,22 @@ resolve_commit_message() {
     template="chore(review): codex /review autofix iteration %d"
   fi
 
-  printf "%s" "$(printf "${template}" "${iteration}")"
+  printf "${template}" "${iteration}"
 }
 
 capture_session_id() {
   local log_file="$1"
-  awk '/session id:/ {print $3}' "${log_file}" | tail -n 1
+  local session_id
+  session_id="$(awk '/session id:/ {print $3}' "${log_file}" | tail -n 1)"
+
+  if [[ -z "${session_id}" ]]; then
+    echo "Error: Could not parse session ID from Codex output." >&2
+    echo "Codex output was:" >&2
+    cat "${log_file}" >&2
+    return 1
+  fi
+
+  printf "%s" "${session_id}"
 }
 
 compute_diff_signature() {
@@ -115,6 +189,7 @@ run_codex_review() {
   local preset="${REVIEW_PRESET}"
   local tmp_output
   tmp_output="$(mktemp)"
+  trap 'rm -f "${tmp_output}"' RETURN
 
   if [[ -z "${preset}" ]]; then
     codex exec --full-auto "/review" 2>&1 | tee "${tmp_output}"
@@ -128,7 +203,7 @@ run_codex_review() {
       1|"pr"|"pr-style"|"branch"|"base"|"baseline"|"review-against-branch")
         selection="1"
         if [[ -z "${REVIEW_BASE_BRANCH}" ]]; then
-          echo "REVIEW_BASE_BRANCH must be set when REVIEW_PRESET='${preset}'." >&2
+          echo "Error: REVIEW_BASE_BRANCH must be set when REVIEW_PRESET='${preset}'." >&2
           exit 1
         fi
         extra_inputs+=("${REVIEW_BASE_BRANCH}")
@@ -139,7 +214,7 @@ run_codex_review() {
       3|"commit"|"sha")
         selection="3"
         if [[ -z "${REVIEW_COMMIT_SHA}" ]]; then
-          echo "REVIEW_COMMIT_SHA must be set when REVIEW_PRESET='${preset}'." >&2
+          echo "Error: REVIEW_COMMIT_SHA must be set when REVIEW_PRESET='${preset}'." >&2
           exit 1
         fi
         extra_inputs+=("${REVIEW_COMMIT_SHA}")
@@ -149,7 +224,7 @@ run_codex_review() {
         local custom_text
         custom_text="$(read_custom_review_instructions)"
         if [[ -z "${custom_text}" ]]; then
-          echo "Custom review preset selected but no REVIEW_CUSTOM_INSTRUCTIONS/FILE provided." >&2
+          echo "Error: Custom review preset selected but no REVIEW_CUSTOM_INSTRUCTIONS/FILE provided." >&2
           exit 1
         fi
         extra_inputs+=("${custom_text}")
@@ -175,21 +250,20 @@ run_codex_review() {
   fi
 
   LAST_REVIEW_SESSION_ID="$(capture_session_id "${tmp_output}")"
-  rm -f "${tmp_output}"
 
   if [[ -z "${LAST_REVIEW_SESSION_ID}" ]]; then
-    echo "Failed to capture Codex session id from /review output." >&2
+    echo "Error: Failed to capture Codex session ID from /review output." >&2
     exit 1
   fi
 }
 
 apply_codex_fixes() {
   if [[ -z "${LAST_REVIEW_SESSION_ID}" ]]; then
-    echo "No Codex session id available for resume." >&2
+    echo "Error: No Codex session ID available for resume." >&2
     exit 1
   fi
 
-  codex exec --full-auto resume "${LAST_REVIEW_SESSION_ID}" "Apply the fixes suggested above" 2>&1
+  codex exec --full-auto resume "${LAST_REVIEW_SESSION_ID}" "${APPLY_FIXES_PROMPT}" 2>&1
 }
 
 if [[ -n "${COMMIT_RULES_DOC}" ]]; then
@@ -234,11 +308,20 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
 
   echo "Changes detected from Codex; committing..."
 
-  git add -A
+  # Stage modified and deleted files
+  git add -u
+
+  # Check for new untracked files created by Codex
+  untracked_files="$(git ls-files --others --exclude-standard)"
+  if [[ -n "${untracked_files}" ]]; then
+    echo "Warning: Codex created new files that will not be auto-committed:" >&2
+    echo "${untracked_files}" >&2
+    echo "Review these files and commit manually if needed." >&2
+  fi
 
   # Double-check we actually staged something (paranoid but safe)
   if git diff --cached --quiet; then
-    echo "No staged changes found after add -A; stopping."
+    echo "No staged changes found after staging; stopping."
     exit 0
   fi
 
