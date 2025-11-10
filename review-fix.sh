@@ -44,11 +44,9 @@ resolve_commit_message() {
     template="${AUTOFIX_COMMIT_MESSAGE}"
   elif [[ -n "${COMMIT_RULES_DOC}" ]]; then
     if [[ -f "${COMMIT_RULES_DOC}" ]]; then
-      template=$(awk -F':' '
-        tolower($1) ~ /^autofix_commit_message$/ {
-          $1="";
-          sub(/^:/, "", $0);
-          sub(/^[[:space:]]+/, "", $0);
+      template=$(awk '
+        tolower($0) ~ /^autofix_commit_message[[:space:]]*:/ {
+          sub(/^[^:]+:[[:space:]]*/, "", $0);
           print;
           exit;
         }
