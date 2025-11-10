@@ -83,7 +83,7 @@ fi
 # Check if Codex CLI is installed
 if ! command -v codex &> /dev/null; then
   echo "Error: 'codex' command not found. Please install Codex CLI." >&2
-  echo "Visit https://codex.com for installation instructions." >&2
+  echo "Refer to Codex documentation for installation instructions." >&2
   exit 1
 fi
 
@@ -128,7 +128,8 @@ resolve_commit_message() {
     template="chore(review): codex /review autofix iteration %d"
   fi
 
-  printf "${template}" "${iteration}"
+  # Use string substitution instead of printf to avoid format string vulnerabilities
+  echo "${template//%d/${iteration}}"
 }
 
 capture_session_id() {
@@ -314,9 +315,9 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
   # Check for new untracked files created by Codex
   untracked_files="$(git ls-files --others --exclude-standard)"
   if [[ -n "${untracked_files}" ]]; then
-    echo "Warning: Codex created new files that will not be auto-committed:" >&2
-    echo "${untracked_files}" >&2
-    echo "Review these files and commit manually if needed." >&2
+    echo "Warning: Codex created new files that will not be auto-committed:"
+    echo "${untracked_files}"
+    echo "Review these files and commit manually if needed."
   fi
 
   # Double-check we actually staged something (paranoid but safe)
