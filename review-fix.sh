@@ -20,6 +20,7 @@ ENVIRONMENT VARIABLES:
     CODEX_MODEL=<model>               Codex model to use (default: gpt-5-codex-high)
     AUTOFIX_COMMIT_MESSAGE=<template> Custom commit message template with %d for iteration
     COMMIT_RULES_DOC=<path>           Path to file defining autofix_commit_message:
+    INCLUDE_UNTRACKED=true|false      Whether to include untracked files in auto-commits (default: false)
 
   Review Presets:
     REVIEW_PRESET=<preset>            Type of review (1-4, pr, uncommitted, commit, custom)
@@ -72,6 +73,9 @@ export CODEX_MODEL
 # Prompt for applying fixes (configurable).
 APPLY_FIXES_PROMPT="${APPLY_FIXES_PROMPT:-Apply the fixes suggested above}"
 
+# Include untracked files in commits (default: false)
+INCLUDE_UNTRACKED="${INCLUDE_UNTRACKED:-false}"
+
 LAST_REVIEW_SESSION_ID=""
 
 # Validate MAX_LOOPS is a positive integer
@@ -102,6 +106,7 @@ to_lowercase() {
 
 resolve_commit_message() {
   local iteration="$1"
+  local changes_summary="${2:-}"
   local template=""
 
   if [[ -n "${AUTOFIX_COMMIT_MESSAGE}" ]]; then
@@ -125,17 +130,18 @@ resolve_commit_message() {
   fi
 
   if [[ -z "${template}" ]]; then
-    template="chore(review): codex /review autofix iteration %d"
+    template="chore(review): codex /review autofix iteration %d %s"
   fi
 
   # Use string substitution instead of printf to avoid format string vulnerabilities
-  echo "${template//%d/${iteration}}"
+  local msg="${template//%d/${iteration}}"
+  echo "${msg//%s/${changes_summary}}"
 }
 
 capture_session_id() {
   local log_file="$1"
   local session_id
-  session_id="$(awk '/session id:/ {print $3}' "${log_file}" | tail -n 1)"
+  session_id="$(awk 'tolower($0) ~ /session id:/ {print $3}' "${log_file}" | tail -n 1)"
 
   if [[ -z "${session_id}" ]]; then
     echo "Error: Could not parse session ID from Codex output." >&2
@@ -267,6 +273,49 @@ apply_codex_fixes() {
   codex exec --full-auto resume "${LAST_REVIEW_SESSION_ID}" "${APPLY_FIXES_PROMPT}" 2>&1
 }
 
+confirm_codex_deletions() {
+  local deleted_before="$1"
+  local deleted_after="$2"
+
+  # Identify files deleted during this iteration (present in "after" but not in "before").
+  local newly_deleted
+  newly_deleted="$(comm -13 \
+    <(printf '%s\n' "${deleted_before}" | sed '/^$/d' | sort) \
+    <(printf '%s\n' "${deleted_after}" | sed '/^$/d' | sort))"
+
+  if [[ -z "${newly_deleted}" ]]; then
+    return 0
+  fi
+
+  echo "Codex removed the following tracked files while applying fixes:"
+  echo "${newly_deleted}"
+  echo "These deletions need your approval before continuing."
+
+  local confirm=""
+  local read_status=0
+  set +e
+  read -r -p "Approve deleting these files? [y/N]: " confirm
+  read_status=$?
+  set -e
+  confirm="$(to_lowercase "${confirm:-}")"
+
+  if [[ "${read_status}" -ne 0 ]]; then
+    echo "No input received (non-interactive stdin). Defaulting to restoring deletions."
+    confirm="n"
+  fi
+
+  if [[ "${confirm}" == "y" || "${confirm}" == "yes" ]]; then
+    echo "Deletion confirmed by user."
+    return 0
+  fi
+
+  echo "Restoring deleted files from HEAD and continuing without deleting them."
+  while IFS= read -r file; do
+    [[ -z "${file}" ]] && continue
+    git restore --source=HEAD -- "${file}"
+  done <<< "${newly_deleted}"
+}
+
 if [[ -n "${COMMIT_RULES_DOC}" ]]; then
   echo "Commit conventions sourced from: ${COMMIT_RULES_DOC}"
 fi
@@ -286,6 +335,7 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
   echo "=== Codex review iteration ${i} ==="
 
   start_signature="$(compute_diff_signature)"
+  deleted_before_iteration="$(git ls-files --deleted)"
   # 1) Ask Codex to review current changes
   run_codex_review
 
@@ -301,6 +351,9 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
     exit 0
   fi
 
+  deleted_after_iteration="$(git ls-files --deleted)"
+  confirm_codex_deletions "${deleted_before_iteration}" "${deleted_after_iteration}"
+
   if [[ "${RUNNING_UNCOMMITTED_PRESET}" == "true" ]]; then
     echo "Codex produced changes in iteration ${i}, but uncommitted-review preset prohibits auto-commits."
     echo "Review the updated working tree and commit manually."
@@ -309,15 +362,21 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
 
   echo "Changes detected from Codex; committing..."
 
-  # Stage modified and deleted files
-  git add -u
+  # Stage modified and deleted files (and optionally new files)
+  if [[ "${INCLUDE_UNTRACKED}" == "true" ]]; then
+    git add -A
+  else
+    git add -u
+  fi
 
   # Check for new untracked files created by Codex
   untracked_files="$(git ls-files --others --exclude-standard)"
   if [[ -n "${untracked_files}" ]]; then
-    echo "Warning: Codex created new files that will not be auto-committed:"
-    echo "${untracked_files}"
-    echo "Review these files and commit manually if needed."
+    if [[ "${INCLUDE_UNTRACKED}" != "true" ]]; then
+      echo "Warning: Codex created new files that will not be auto-committed (INCLUDE_UNTRACKED=false):"
+      echo "${untracked_files}"
+      echo "Review these files and commit manually if needed."
+    fi
   fi
 
   # Double-check we actually staged something (paranoid but safe)
@@ -326,7 +385,14 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
     exit 0
   fi
 
-  git commit -m "$(resolve_commit_message "${i}")"
+  # Generate a short summary of changes (e.g. "[modified: foo.js, bar.py]")
+  changes_summary=""
+  files_changed="$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
+  if [[ -n "${files_changed}" ]]; then
+    changes_summary="[modified: ${files_changed}]"
+  fi
+
+  git commit -m "$(resolve_commit_message "${i}" "${changes_summary}")"
   echo "Committed Codex fixes for iteration ${i}."
 done
 

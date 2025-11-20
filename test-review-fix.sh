@@ -161,7 +161,7 @@ case "${COMMAND}" in
       REVIEW_CMD="$1"
       if [[ "${REVIEW_CMD}" == "/review" ]]; then
         echo "Running code review..."
-        echo "session id: mock-session-12345"
+        echo "Session ID: mock-session-12345"
         if [[ ! -t 0 ]]; then
           while IFS= read -r line; do
             echo "Selected option: ${line}"
@@ -238,7 +238,7 @@ case "${COMMAND}" in
       REVIEW_CMD="$1"
       if [[ "${REVIEW_CMD}" == "/review" ]]; then
         echo "Running code review..."
-        echo "session id: mock-session-23456"
+        echo "SESSION ID: mock-session-23456"
         if [[ ! -t 0 ]]; then
           while IFS= read -r line; do
             echo "Selected option: ${line}"
@@ -495,7 +495,7 @@ MOCK_EOF
 
   # Test custom commit message - add rules file to git to keep working tree clean
   cat > commit-rules.md << 'EOF'
-autofix_commit_message: fix(auto): iteration %d fixes
+autofix_commit_message: fix(auto): iteration %d fixes %s
 EOF
 
   echo "console.log('test')" > test.js
@@ -506,12 +506,12 @@ EOF
   if [[ "${TEST_MODE}" == "--mock" ]]; then
     local output_log="/tmp/test-output-commit-msg-$$.log"
     if MAX_LOOPS=1 COMMIT_RULES_DOC=commit-rules.md bash "${REVIEW_FIX_SCRIPT}" 2>&1 | tee "${output_log}"; then
-      local expected_message="fix(auto): iteration 1 fixes"
+      local expected_message="fix(auto): iteration 1 fixes [modified: test.js]"
       local latest_commit
       latest_commit="$(git log -1 --pretty=%s 2>/dev/null || true)"
 
       if [[ "${latest_commit}" == "${expected_message}" ]]; then
-        log_success "Custom commit message format applied"
+        log_success "Custom commit message format applied with summary"
         return 0
       fi
 
@@ -525,6 +525,70 @@ EOF
   else
     log_info "Skipping commit message test in real mode"
     return 0
+  fi
+}
+
+test_untracked_files_handling() {
+  local test_dir="${TEST_ROOT}/untracked/repo"
+  local mock_bin_dir="${TEST_ROOT}/untracked/bin"
+
+  if [[ "${TEST_MODE}" == "--mock" ]]; then
+    mkdir -p "${mock_bin_dir}"
+    local mock_codex="${mock_bin_dir}/codex"
+    cat > "${mock_codex}" << 'MOCK_EOF'
+#!/usr/bin/env bash
+COMMAND="$1"
+shift
+case "${COMMAND}" in
+  exec)
+    SUBCOMMAND="$1"
+    shift
+    if [[ "${SUBCOMMAND}" == "--full-auto" ]]; then
+      REVIEW_CMD="$1"
+      if [[ "${REVIEW_CMD}" == "/review" ]]; then
+        echo "Running code review..."
+        echo "session id: mock-session-untracked"
+        exit 0
+      elif [[ "${REVIEW_CMD}" == "resume" ]]; then
+        echo "Resuming session $1"
+        echo "Creating new file"
+        echo "new content" > new-file.js
+        exit 0
+      fi
+    fi
+    ;;
+esac
+exit 1
+MOCK_EOF
+    chmod +x "${mock_codex}"
+    export PATH="${mock_bin_dir}:${PATH}"
+  fi
+
+  setup_test_env "${test_dir}"
+
+  log_info "Testing INCLUDE_UNTRACKED=true"
+
+  local output_log="/tmp/test-output-untracked-$$.log"
+  
+  # Retry with branch preset to verify commit behavior
+  setup_test_env "${test_dir}-2"
+  # Need to re-export PATH for the new shell or just rely on previous export if in same subshell?
+  # The mock bin dir is absolute, so we can reuse it.
+  export PATH="${mock_bin_dir}:${PATH}"
+  
+  git checkout -q -b feature/untracked-test
+  
+  if MAX_LOOPS=1 INCLUDE_UNTRACKED=true REVIEW_PRESET=branch REVIEW_BASE_BRANCH=main bash "${REVIEW_FIX_SCRIPT}" 2>&1 | tee "${output_log}"; then
+    if git ls-files new-file.js --error-unmatch &>/dev/null; then
+      log_success "Untracked file was committed with INCLUDE_UNTRACKED=true"
+      return 0
+    else
+      log_error "New file was not committed"
+      return 1
+    fi
+  else
+    log_error "Untracked test failed execution"
+    return 1
   fi
 }
 
@@ -575,6 +639,7 @@ main() {
   run_test "Preset 3: Specific Commit" test_preset_3_commit || true
   run_test "Preset 4: Custom Instructions" test_preset_4_custom || true
   run_test "Custom Commit Messages" test_commit_message_resolution || true
+  run_test "Untracked Files Handling" test_untracked_files_handling || true
 
   echo
   print_summary

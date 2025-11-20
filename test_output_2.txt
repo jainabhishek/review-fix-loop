@@ -1,0 +1,139 @@
+========================================
+Testing review-fix.sh
+Test mode: --mock
+========================================
+
+[0;34m[INFO][0m Running test: Preset 1: Branch/PR Review
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/preset-1/repo
+[0;34m[INFO][0m Testing REVIEW_PRESET=branch with REVIEW_BASE_BRANCH=main
+Starting Codex /review autofix loop (max 1 iterations)...
+
+=== Codex review iteration 1 ===
+Running code review...
+Session ID: mock-session-12345
+Selected option: 1
+Selected option: main
+Resuming session resume
+Applying fixes
+Changes detected from Codex; committing...
+[feature/test-branch 7e64dbe] chore(review): codex /review autofix iteration 1 [modified: test-file.js,]
+ 1 file changed, 1 insertion(+)
+Committed Codex fixes for iteration 1.
+
+Reached MAX_LOOPS=1 with Codex still making changes or suggestions.
+Review the repo manually to ensure everything looks good.
+[0;32m[PASS][0m Preset 1 (branch review) executed successfully
+[0;32m[PASS][0m Preset 1: Branch/PR Review
+[0;34m[INFO][0m Running test: Preset 2: Uncommitted Changes
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/preset-2/repo
+[0;34m[INFO][0m Testing REVIEW_PRESET=uncommitted
+Uncommitted-changes review preset selected; skipping clean working tree check.
+Starting Codex /review autofix loop (max 1 iterations)...
+
+=== Codex review iteration 1 ===
+Running code review...
+SESSION ID: mock-session-23456
+Selected option: 2
+Resuming session resume
+Applying fixes
+No changes from Codex in iteration 1.
+Assuming no more issues to fix. Exiting.
+[0;32m[PASS][0m Preset 2 (uncommitted changes) executed successfully
+[0;32m[PASS][0m Preset 2: Uncommitted Changes
+[0;34m[INFO][0m Running test: Preset 3: Specific Commit
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/preset-3/repo
+[0;34m[INFO][0m Testing REVIEW_PRESET=commit with REVIEW_COMMIT_SHA=2033749d1c2fa003388a2cb6fc93ad2c1b53c1c0
+Starting Codex /review autofix loop (max 1 iterations)...
+
+=== Codex review iteration 1 ===
+Running code review...
+session id: mock-session-34567
+Selected option: 3
+Selected option: 2033749d1c2fa003388a2cb6fc93ad2c1b53c1c0
+Resuming session resume
+Applying fixes
+Changes detected from Codex; committing...
+[main 88bd360] chore(review): codex /review autofix iteration 1 [modified: test-file.js,]
+ 1 file changed, 1 insertion(+)
+Committed Codex fixes for iteration 1.
+
+Reached MAX_LOOPS=1 with Codex still making changes or suggestions.
+Review the repo manually to ensure everything looks good.
+[0;32m[PASS][0m Preset 3 (commit review) executed successfully
+[0;32m[PASS][0m Preset 3: Specific Commit
+[0;34m[INFO][0m Running test: Preset 4: Custom Instructions
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/preset-4/repo
+[0;34m[INFO][0m Testing REVIEW_PRESET=custom with instructions file
+Starting Codex /review autofix loop (max 1 iterations)...
+
+=== Codex review iteration 1 ===
+Running code review...
+session id: mock-session-45678
+Selected option: 4
+Selected option: Review the code for:
+Selected option: - Performance optimizations
+Selected option: - Security vulnerabilities
+Selected option: - Best practices
+Resuming session resume
+Applying fixes
+Changes detected from Codex; committing...
+[main e8cc276] chore(review): codex /review autofix iteration 1 [modified: test-file.js,]
+ 1 file changed, 1 insertion(+)
+Committed Codex fixes for iteration 1.
+
+Reached MAX_LOOPS=1 with Codex still making changes or suggestions.
+Review the repo manually to ensure everything looks good.
+[0;32m[PASS][0m Preset 4 (custom instructions) executed successfully
+[0;32m[PASS][0m Preset 4: Custom Instructions
+[0;34m[INFO][0m Running test: Custom Commit Messages
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/commit-msg/repo
+Commit conventions sourced from: commit-rules.md
+Starting Codex /review autofix loop (max 1 iterations)...
+
+=== Codex review iteration 1 ===
+Running code review...
+session id: mock-session-56789
+Resuming session resume
+Applying fixes
+Changes detected from Codex; committing...
+[main c22929a] fix(auto): iteration 1 fixes [modified: test.js,]
+ 1 file changed, 1 insertion(+)
+Committed Codex fixes for iteration 1.
+
+Reached MAX_LOOPS=1 with Codex still making changes or suggestions.
+Review the repo manually to ensure everything looks good.
+[0;31m[FAIL][0m Expected commit message 'fix(auto): iteration 1 fixes [modified: test.js]' but found 'fix(auto): iteration 1 fixes [modified: test.js,]'
+[0;34m[INFO][0m Runner output captured at /tmp/test-output-commit-msg-94774.log
+[0;31m[FAIL][0m Custom Commit Messages
+[0;34m[INFO][0m Running test: Untracked Files Handling
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/untracked/repo
+[0;34m[INFO][0m Testing INCLUDE_UNTRACKED=true
+[0;34m[INFO][0m Created test repository in /tmp/review-fix-test-94774/untracked/repo-2
+Starting Codex /review autofix loop (max 1 iterations)...
+
+=== Codex review iteration 1 ===
+Running code review...
+session id: mock-session-untracked
+Resuming session resume
+Creating new file
+Changes detected from Codex; committing...
+[feature/untracked-test 1febed3] chore(review): codex /review autofix iteration 1 [modified: new-file.js,]
+ 1 file changed, 1 insertion(+)
+ create mode 100644 new-file.js
+Committed Codex fixes for iteration 1.
+
+Reached MAX_LOOPS=1 with Codex still making changes or suggestions.
+Review the repo manually to ensure everything looks good.
+[0;32m[PASS][0m Untracked file was committed with INCLUDE_UNTRACKED=true
+[0;32m[PASS][0m Untracked Files Handling
+
+
+================================
+Test Summary
+================================
+[0;32mPassed: 5[0m
+[0;31mFailed: 1[0m
+Total:  6
+================================
+[0;31m[FAIL][0m Some tests failed
+[0;34m[INFO][0m Cleaning up test directory: /tmp/review-fix-test-94774
