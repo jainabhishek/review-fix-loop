@@ -75,7 +75,8 @@ capture_session_id() {
 compute_diff_signature() {
   {
     git status --porcelain --untracked-files=all
-    git diff --binary HEAD
+    # Handle empty repositories where HEAD doesn't exist yet
+    git diff --binary HEAD 2>/dev/null || echo "# empty repository"
   } | git hash-object --stdin
 }
 
