@@ -44,8 +44,11 @@ Configure the script using environment variables:
 |----------|---------|-------------|
 | `MAX_LOOPS` | `10` | Maximum review/fix iterations |
 | `CODEX_MODEL` | `gpt-5-codex-high` | Codex model to use |
-| `AUTOFIX_COMMIT_MESSAGE` | `chore(review): codex /review autofix iteration %d` | Commit message template (`%d` = iteration number) |
+| `AUTOFIX_COMMIT_MESSAGE` | `chore(review): codex /review autofix iteration %d` | Commit message template (`%d` = iteration number; `%s` = summary, optional) |
 | `COMMIT_RULES_DOC` | - | Path to doc defining `autofix_commit_message:` |
+| `APPLY_FIXES_PROMPT` | `Apply the fixes suggested above` | Prompt passed to Codex when resuming a session |
+| `INCLUDE_UNTRACKED` | `false` | Include untracked files in auto-commits (`true` uses `git add -A` to capture deletions and new files) |
+| `AUTO_APPROVE_DELETIONS` | `false` | Automatically accept Codex deletions without prompting (useful for CI) |
 
 ### Review Presets
 
@@ -114,6 +117,10 @@ COMMIT_RULES_DOC=./commit-rules.md ./review-fix.sh
 ```bash
 MAX_LOOPS=25 CODEX_MODEL=gpt-5-codex-high ./review-fix.sh
 ```
+
+## Behavior Notes
+
+- When `INCLUDE_UNTRACKED=true`, the script stages with `git add -A` so Codex-created deletions and new files are both captured. If you previously relied on untracked files being skipped or deletions being ignored in this mode, adjust your workflow accordingly.
 
 ## How It Works
 
