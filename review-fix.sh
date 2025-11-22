@@ -75,6 +75,8 @@ APPLY_FIXES_PROMPT="${APPLY_FIXES_PROMPT:-Apply the fixes suggested above}"
 
 # Include untracked files in commits (default: false)
 INCLUDE_UNTRACKED="${INCLUDE_UNTRACKED:-false}"
+# Auto-approve Codex deletions without prompting (default: false)
+AUTO_APPROVE_DELETIONS="${AUTO_APPROVE_DELETIONS:-false}"
 
 LAST_REVIEW_SESSION_ID=""
 
@@ -114,7 +116,7 @@ resolve_commit_message() {
   elif [[ -n "${COMMIT_RULES_DOC}" ]]; then
     if [[ -f "${COMMIT_RULES_DOC}" ]]; then
       template=$(awk '
-        tolower($0) ~ /^autofix_commit_message[[:space:]]*:/ {
+        tolower($0) ~ /^[[:space:]]*autofix_commit_message[[:space:]]*:/ {
           sub(/^[^:]+:[[:space:]]*/, "", $0);
           print;
           exit;
@@ -135,7 +137,37 @@ resolve_commit_message() {
 
   # Use string substitution instead of printf to avoid format string vulnerabilities
   local msg="${template//%d/${iteration}}"
-  echo "${msg//%s/${changes_summary}}"
+  if [[ "${msg}" == *"%s"* ]]; then
+    msg="${msg//%s/${changes_summary}}"
+  elif [[ -n "${changes_summary}" ]]; then
+    msg="${msg} ${changes_summary}"
+  fi
+  echo "${msg}"
+}
+
+generate_ai_commit_message() {
+  local diff_content
+  # Get staged changes
+  diff_content="$(git diff --cached)"
+  
+  if [[ -z "${diff_content}" ]]; then
+    echo "chore(review): no changes detected"
+    return
+  fi
+
+  # Ask Codex to generate a commit message
+  # We pipe the diff to codex exec
+  local ai_msg
+  ai_msg="$(echo "${diff_content}" | codex exec "Generate a concise, one-line commit message for these changes. Follow conventional commits format (e.g. fix: ..., feat: ...). Output ONLY the message text, no quotes or markdown." 2>/dev/null)"
+  
+  # Fallback if Codex fails or returns empty
+  if [[ -z "${ai_msg}" ]]; then
+    local files_changed
+    files_changed="$(git diff --cached --name-only | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')"
+    echo "chore(review): codex autofix [modified: ${files_changed}]"
+  else
+    echo "${ai_msg}"
+  fi
 }
 
 capture_session_id() {
@@ -287,6 +319,11 @@ confirm_codex_deletions() {
     return 0
   fi
 
+  if [[ "$(to_lowercase "${AUTO_APPROVE_DELETIONS}")" == "true" ]]; then
+    echo "AUTO_APPROVE_DELETIONS=true; accepting Codex deletions without prompting."
+    return 0
+  fi
+
   echo "Codex removed the following tracked files while applying fixes:"
   echo "${newly_deleted}"
   echo "These deletions need your approval before continuing."
@@ -385,14 +422,12 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
     exit 0
   fi
 
-  # Generate a short summary of changes (e.g. "[modified: foo.js, bar.py]")
-  changes_summary=""
-  files_changed="$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
-  if [[ -n "${files_changed}" ]]; then
-    changes_summary="[modified: ${files_changed}]"
-  fi
-
-  git commit -m "$(resolve_commit_message "${i}" "${changes_summary}")"
+  # Generate AI commit message
+  echo "Generating AI commit message..."
+  ai_commit_msg="$(generate_ai_commit_message)"
+  
+  # Use resolve_commit_message to respect templates, passing AI msg as summary
+  git commit -m "$(resolve_commit_message "${i}" "${ai_commit_msg}")"
   echo "Committed Codex fixes for iteration ${i}."
 done
 

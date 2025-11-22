@@ -110,6 +110,14 @@ case "${COMMAND}" in
           echo "// Fixed issue" >> test-file.js
         fi
 
+      fi
+    elif [[ "${SUBCOMMAND}" == "exec" ]]; then
+      # Handle "codex exec 'prompt'" format (used for commit messages)
+      PROMPT="$1"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        # Read stdin (diff) to simulate processing
+        cat > /dev/null
+        echo "fix(ai): fixed issues found in review"
         exit 0
       fi
     fi
@@ -174,6 +182,12 @@ case "${COMMAND}" in
         if [[ -f "test-file.js" ]]; then
           echo "// Fixed issue" >> test-file.js
         fi
+        exit 0
+      fi
+    else
+      PROMPT="${SUBCOMMAND}"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        echo "fix(ai): fixed issues found in review"
         exit 0
       fi
     fi
@@ -253,6 +267,12 @@ case "${COMMAND}" in
         fi
         exit 0
       fi
+    else
+      PROMPT="${SUBCOMMAND}"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        echo "fix(ai): fixed issues found in review"
+        exit 0
+      fi
     fi
     ;;
 esac
@@ -326,6 +346,12 @@ case "${COMMAND}" in
         if [[ -f "test-file.js" ]]; then
           echo "// Fixed issue" >> test-file.js
         fi
+        exit 0
+      fi
+    else
+      PROMPT="${SUBCOMMAND}"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        echo "fix(ai): fixed issues found in review"
         exit 0
       fi
     fi
@@ -405,6 +431,12 @@ case "${COMMAND}" in
         fi
         exit 0
       fi
+    else
+      PROMPT="${SUBCOMMAND}"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        echo "fix(ai): fixed issues found in review"
+        exit 0
+      fi
     fi
     ;;
 esac
@@ -482,6 +514,12 @@ case "${COMMAND}" in
         fi
         exit 0
       fi
+    else
+      PROMPT="${SUBCOMMAND}"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        echo "fix(ai): fixed issues found in review"
+        exit 0
+      fi
     fi
     ;;
 esac
@@ -495,7 +533,7 @@ MOCK_EOF
 
   # Test custom commit message - add rules file to git to keep working tree clean
   cat > commit-rules.md << 'EOF'
-autofix_commit_message: fix(auto): iteration %d fixes %s
+  autofix_commit_message: fix(auto): iteration %d fixes %s
 EOF
 
   echo "console.log('test')" > test.js
@@ -506,7 +544,7 @@ EOF
   if [[ "${TEST_MODE}" == "--mock" ]]; then
     local output_log="/tmp/test-output-commit-msg-$$.log"
     if MAX_LOOPS=1 COMMIT_RULES_DOC=commit-rules.md bash "${REVIEW_FIX_SCRIPT}" 2>&1 | tee "${output_log}"; then
-      local expected_message="fix(auto): iteration 1 fixes [modified: test.js]"
+      local expected_message="fix(auto): iteration 1 fixes fix(ai): fixed issues found in review"
       local latest_commit
       latest_commit="$(git log -1 --pretty=%s 2>/dev/null || true)"
 
@@ -553,6 +591,12 @@ case "${COMMAND}" in
         echo "Resuming session $1"
         echo "Creating new file"
         echo "new content" > new-file.js
+        exit 0
+      fi
+    else
+      PROMPT="${SUBCOMMAND}"
+      if [[ "${PROMPT}" == *"Generate a concise"* ]]; then
+        echo "fix(ai): fixed issues found in review"
         exit 0
       fi
     fi

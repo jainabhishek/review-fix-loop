@@ -69,8 +69,11 @@ Template uses printf-style `%d` placeholder for iteration number.
 Core configuration:
 - `MAX_LOOPS` - Maximum iterations (default: 10)
 - `CODEX_MODEL` - Codex model to use (default: gpt-5-codex-high)
-- `AUTOFIX_COMMIT_MESSAGE` - Custom commit message template with `%d` for iteration
+- `AUTOFIX_COMMIT_MESSAGE` - Custom commit message template with `%d` for iteration; `%s` (changes summary) is optional and will be appended if missing
 - `COMMIT_RULES_DOC` - Path to file defining `autofix_commit_message:`
+- `APPLY_FIXES_PROMPT` - Prompt text passed when resuming Codex sessions
+- `INCLUDE_UNTRACKED` - Include untracked files (`true` uses `git add -A`)
+- `AUTO_APPROVE_DELETIONS` - Accept Codex deletions without prompting (helpful in CI)
 
 Preset configuration:
 - `REVIEW_PRESET` - Review mode (1-4 or named preset)
