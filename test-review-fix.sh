@@ -53,6 +53,8 @@ setup_test_env() {
   git init -q
   git config user.name "Test User"
   git config user.email "test@example.com"
+  # Disable commit signing for test environments
+  git config commit.gpgsign false
 
   # Create initial commit
   echo "# Test Project" > README.md
