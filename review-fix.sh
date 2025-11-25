@@ -21,6 +21,8 @@ ENVIRONMENT VARIABLES:
     AUTOFIX_COMMIT_MESSAGE=<template> Custom commit message template with %d for iteration
     COMMIT_RULES_DOC=<path>           Path to file defining autofix_commit_message:
     INCLUDE_UNTRACKED=true|false      Whether to include untracked files in auto-commits (default: false)
+    DISABLE_AI_COMMIT_MESSAGES=true   Skip Codex API calls for commit messages (default: false)
+    AI_COMMIT_MAX_DIFF_BYTES=N        Max diff size before fallback commit message (default: 50000)
 
   Review Presets:
     REVIEW_PRESET=<preset>            Type of review (1-4, pr, uncommitted, commit, custom)
@@ -75,6 +77,10 @@ APPLY_FIXES_PROMPT="${APPLY_FIXES_PROMPT:-Apply the fixes suggested above}"
 
 # Include untracked files in commits (default: false)
 INCLUDE_UNTRACKED="${INCLUDE_UNTRACKED:-false}"
+# Skip Codex API calls for commit messages (default: false)
+DISABLE_AI_COMMIT_MESSAGES="${DISABLE_AI_COMMIT_MESSAGES:-false}"
+# Max diff size (in bytes) before using fallback commit message
+AI_COMMIT_MAX_DIFF_BYTES="${AI_COMMIT_MAX_DIFF_BYTES:-50000}"
 # Auto-approve Codex deletions without prompting (default: false)
 AUTO_APPROVE_DELETIONS="${AUTO_APPROVE_DELETIONS:-false}"
 
@@ -119,7 +125,7 @@ get_autofix_commit_template() {
   elif [[ -n "${COMMIT_RULES_DOC}" ]]; then
     if [[ -f "${COMMIT_RULES_DOC}" ]]; then
       template=$(awk '
-        tolower($0) ~ /^[[:space:]]*autofix_commit_message[[:space:]]*:/ {
+        tolower($0) ~ /^autofix_commit_message[[:space:]]*:/ {
           sub(/^[^:]+:[[:space:]]*/, "", $0);
           print;
           exit;
@@ -159,8 +165,6 @@ resolve_commit_message() {
   local msg="${template//%d/${iteration}}"
   if [[ "${msg}" == *"%s"* ]]; then
     msg="${msg//%s/${changes_summary}}"
-  elif [[ -n "${changes_summary}" ]]; then
-    msg="${msg} ${changes_summary}"
   fi
   echo "${msg}"
 }
@@ -168,7 +172,10 @@ resolve_commit_message() {
 generate_ai_commit_message() {
   local diff_content
   local diff_size
-  local max_diff_size=50000  # ~50KB limit for Codex input
+  local max_diff_size="${AI_COMMIT_MAX_DIFF_BYTES}"
+  if ! [[ "${max_diff_size}" =~ ^[0-9]+$ ]]; then
+    max_diff_size=50000
+  fi
 
   # Get staged changes
   diff_content="$(git diff --cached)"
@@ -181,7 +188,7 @@ generate_ai_commit_message() {
   # Check diff size to avoid overwhelming Codex
   diff_size="${#diff_content}"
   if [[ "${diff_size}" -gt "${max_diff_size}" ]]; then
-    echo "Warning: Diff is very large (${diff_size} bytes). Using fallback commit message." >&2
+    echo "Warning: Diff is very large (${diff_size} bytes > AI_COMMIT_MAX_DIFF_BYTES=${max_diff_size}). Using fallback commit message." >&2
     local files_changed
     files_changed="$(git diff --cached --name-only | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')"
     echo "chore(review): codex autofix [modified: ${files_changed}]"
@@ -194,7 +201,7 @@ generate_ai_commit_message() {
   local codex_stderr
   local codex_tmpfile
   codex_tmpfile="$(mktemp)"
-  trap 'rm -f "${codex_tmpfile}"' RETURN
+  trap 'rm -f "${codex_tmpfile}"' EXIT INT TERM
 
   ai_msg="$(codex exec "Generate a concise, one-line commit message for these changes. Follow conventional commits format (e.g. fix: ..., feat: ...). Output ONLY the message text, no quotes or markdown." 2>"${codex_tmpfile}" <<EOF
 ${diff_content}
@@ -202,6 +209,8 @@ EOF
 )"
 
   codex_stderr="$(cat "${codex_tmpfile}")"
+  rm -f "${codex_tmpfile}"
+  trap - EXIT INT TERM
 
   # Check for Codex errors (authentication, API issues, etc.)
   if [[ -n "${codex_stderr}" ]]; then
@@ -223,9 +232,9 @@ EOF
 validate_session_id_format() {
   local session_id="$1"
   # Session IDs should be alphanumeric with hyphens, underscores, or periods
-  # Typical format: alphanumeric-alphanumeric or UUID-like
+  # Typical format: alphanumeric-alphanumeric or UUID-like; allow short 3-char IDs
   # Examples: "mock-session-12345", "abc123-def456", "550e8400-e29b-41d4-a716-446655440000"
-  if [[ "${session_id}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{3,127}$ ]]; then
+  if [[ "${session_id}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{2,127}$ ]]; then
     return 0
   fi
   return 1
@@ -264,7 +273,7 @@ capture_session_id() {
   # Validate session ID format to prevent capturing garbage
   if ! validate_session_id_format "${session_id}"; then
     echo "Error: Extracted session ID '${session_id}' does not match expected format." >&2
-    echo "Expected format: alphanumeric with hyphens/underscores, 4-128 characters." >&2
+    echo "Expected format: alphanumeric with hyphens/underscores/periods, 3-128 characters." >&2
     echo "Codex output was:" >&2
     cat "${log_file}" >&2
     return 1
@@ -440,7 +449,7 @@ confirm_codex_deletions() {
   local confirm=""
   local read_status=0
   set +e
-  read -r -p "Approve deleting these files? [y/N]: " confirm
+  read -r -p "Approve deleting these files? [y/yes/N]: " confirm
   read_status=$?
   set -e
   confirm="$(to_lowercase "${confirm:-}")"
@@ -516,10 +525,26 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
   if [[ -n "${untracked_files}" ]] && [[ "${INCLUDE_UNTRACKED}" != "true" ]]; then
     echo "Warning: Codex created new files, but INCLUDE_UNTRACKED=false:"
     echo "${untracked_files}"
-    echo "Auto-enabling INCLUDE_UNTRACKED for this and subsequent iterations to maintain consistency."
-    echo "To suppress this, set INCLUDE_UNTRACKED=true or manually handle new files."
-    INCLUDE_UNTRACKED="true"
-    should_include_untracked="true"
+    echo "Include these untracked files in the auto-commit?"
+
+    include_untracked_choice=""
+    if [[ -t 0 ]]; then
+      set +e
+      read -r -p "[y/yes/N]: " include_untracked_choice
+      set -e
+      include_untracked_choice="$(to_lowercase "${include_untracked_choice:-}")"
+    else
+      echo "Non-interactive shell detected; leaving INCLUDE_UNTRACKED=false. Stage new files manually or rerun with INCLUDE_UNTRACKED=true."
+      include_untracked_choice="n"
+    fi
+
+    if [[ "${include_untracked_choice}" == "y" || "${include_untracked_choice}" == "yes" ]]; then
+      echo "Including untracked files and persisting INCLUDE_UNTRACKED=true for subsequent iterations."
+      INCLUDE_UNTRACKED="true"
+      should_include_untracked="true"
+    else
+      echo "Skipping untracked files; set INCLUDE_UNTRACKED=true to auto-include in future runs."
+    fi
   fi
 
   # Stage modified and deleted files (and optionally new files)
@@ -538,9 +563,15 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
   # Generate AI commit message only if needed (template contains %s)
   ai_commit_msg=""
   commit_template="$(get_autofix_commit_template)"
+  disable_ai_commit_messages="$(to_lowercase "${DISABLE_AI_COMMIT_MESSAGES}")"
   if [[ "${commit_template}" == *"%s"* ]]; then
-    echo "Generating AI commit message..."
-    ai_commit_msg="$(generate_ai_commit_message)"
+    if [[ "${disable_ai_commit_messages}" == "true" ]]; then
+      echo "DISABLE_AI_COMMIT_MESSAGES=true; skipping Codex commit message API call."
+      ai_commit_msg="summary unavailable (AI commit messages disabled)"
+    else
+      echo "Generating AI commit message (set DISABLE_AI_COMMIT_MESSAGES=true to skip Codex API calls)..."
+      ai_commit_msg="$(generate_ai_commit_message)"
+    fi
   else
     echo "Using commit message template without summary placeholder (skipping AI generation)."
   fi
