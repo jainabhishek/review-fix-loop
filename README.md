@@ -120,7 +120,48 @@ MAX_LOOPS=25 CODEX_MODEL=gpt-5-codex-high ./review-fix.sh
 
 ## Behavior Notes
 
-- When `INCLUDE_UNTRACKED=true`, the script stages with `git add -A` so Codex-created deletions and new files are both captured. If you previously relied on untracked files being skipped or deletions being ignored in this mode, adjust your workflow accordingly.
+### Untracked Files Auto-Inclusion
+
+- When `INCLUDE_UNTRACKED=true`, the script stages with `git add -A` so Codex-created deletions and new files are both captured.
+- **New behavior**: If Codex creates new files when `INCLUDE_UNTRACKED=false`, the script automatically enables `INCLUDE_UNTRACKED` for that iteration to maintain consistency. This prevents scenarios where Codex creates files that never get committed, causing repeated iterations.
+
+### File Deletion Approval
+
+The script asks for user confirmation before committing file deletions made by Codex, with these behaviors:
+
+- **Interactive Mode** (default): Prompts user to approve deletions with `[y/N]`
+- **CI Environments**: Auto-approves deletions with a warning (detects GitHub Actions, GitLab CI, CircleCI, Travis, Jenkins, Buildkite)
+- **Non-Interactive stdin**: Defaults to restoring deletions for safety
+- **Override**: Set `AUTO_APPROVE_DELETIONS=true` to auto-approve in any environment
+
+To explicitly control behavior in CI:
+```bash
+# Auto-approve deletions (recommended for CI)
+AUTO_APPROVE_DELETIONS=true ./review-fix.sh
+
+# Force interactive prompts (will fail in CI)
+AUTO_APPROVE_DELETIONS=false ./review-fix.sh
+```
+
+### AI-Generated Commit Messages
+
+The script uses Codex API to generate commit messages when:
+
+- No custom `AUTOFIX_COMMIT_MESSAGE` template is set, OR
+- Template contains `%s` placeholder for AI-generated summary
+
+**Limitations:**
+
+- Requires authenticated Codex CLI access
+- Skipped for diffs larger than ~50KB (uses fallback message)
+- Falls back to `"chore(review): codex autofix [modified: files]"` on API errors
+
+To avoid AI commit message generation:
+
+```bash
+# Use a fixed template without %s placeholder
+AUTOFIX_COMMIT_MESSAGE="fix: auto-review iteration %d" ./review-fix.sh
+```
 
 ## How It Works
 
@@ -148,6 +189,33 @@ The script uses `git hash-object` on combined status and diff output to detect i
 - Checks for staged changes before committing
 - Prevents infinite loops with `MAX_LOOPS`
 - Clear error messages and warnings
+- Session ID format validation to prevent garbage capture
+- Format string sanitization in commit messages
+
+### Security Considerations
+
+**Custom Review Instructions**: When using preset 4 with `REVIEW_CUSTOM_INSTRUCTIONS` or `REVIEW_CUSTOM_INSTRUCTIONS_FILE`, the content is passed directly to Codex stdin. While properly quoted, avoid using untrusted or dynamically generated instructions that could contain:
+
+- Shell metacharacters in filenames or paths
+- Malicious code snippets for Codex to evaluate
+- Instructions that could manipulate Codex into dangerous actions
+
+**Example safe usage:**
+
+```bash
+# Safe - controlled content
+REVIEW_CUSTOM_INSTRUCTIONS="Focus on performance and security" ./review-fix.sh
+
+# Safe - from trusted file
+REVIEW_CUSTOM_INSTRUCTIONS_FILE=./company-review-standards.md ./review-fix.sh
+```
+
+**Best practices:**
+
+- Only use trusted sources for custom instructions
+- Validate file contents before using `REVIEW_CUSTOM_INSTRUCTIONS_FILE`
+- Avoid interpolating user input directly into instructions
+- Review Codex-generated changes before pushing to production
 
 ## Testing
 

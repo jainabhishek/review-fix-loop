@@ -106,6 +106,12 @@ to_lowercase() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+sanitize_format_string() {
+  # Escape % characters in user/AI-provided content to prevent format string issues
+  # Example: "fix: resolved %s issue" -> "fix: resolved %%s issue"
+  printf '%s' "$1" | sed 's/%/%%/g'
+}
+
 resolve_commit_message() {
   local iteration="$1"
   local changes_summary="${2:-}"
@@ -135,6 +141,11 @@ resolve_commit_message() {
     template="chore(review): codex /review autofix iteration %d %s"
   fi
 
+  # Sanitize changes_summary to prevent format string injection
+  if [[ -n "${changes_summary}" ]]; then
+    changes_summary="$(sanitize_format_string "${changes_summary}")"
+  fi
+
   # Use string substitution instead of printf to avoid format string vulnerabilities
   local msg="${template//%d/${iteration}}"
   if [[ "${msg}" == *"%s"* ]]; then
@@ -147,21 +158,51 @@ resolve_commit_message() {
 
 generate_ai_commit_message() {
   local diff_content
+  local diff_size
+  local max_diff_size=50000  # ~50KB limit for Codex input
+
   # Get staged changes
   diff_content="$(git diff --cached)"
-  
+
   if [[ -z "${diff_content}" ]]; then
     echo "chore(review): no changes detected"
     return
   fi
 
-  # Ask Codex to generate a commit message
-  # We pipe the diff to codex exec
+  # Check diff size to avoid overwhelming Codex
+  diff_size="${#diff_content}"
+  if [[ "${diff_size}" -gt "${max_diff_size}" ]]; then
+    echo "Warning: Diff is very large (${diff_size} bytes). Using fallback commit message." >&2
+    local files_changed
+    files_changed="$(git diff --cached --name-only | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')"
+    echo "chore(review): codex autofix [modified: ${files_changed}]"
+    return
+  fi
+
+  # Ask Codex to generate a commit message using heredoc to avoid command-line limits
+  # Capture stderr to detect authentication or API errors
   local ai_msg
-  ai_msg="$(echo "${diff_content}" | codex exec "Generate a concise, one-line commit message for these changes. Follow conventional commits format (e.g. fix: ..., feat: ...). Output ONLY the message text, no quotes or markdown." 2>/dev/null)"
-  
+  local codex_stderr
+  local codex_tmpfile
+  codex_tmpfile="$(mktemp)"
+  trap 'rm -f "${codex_tmpfile}"' RETURN
+
+  ai_msg="$(codex exec "Generate a concise, one-line commit message for these changes. Follow conventional commits format (e.g. fix: ..., feat: ...). Output ONLY the message text, no quotes or markdown." 2>"${codex_tmpfile}" <<EOF
+${diff_content}
+EOF
+)"
+
+  codex_stderr="$(cat "${codex_tmpfile}")"
+
+  # Check for Codex errors (authentication, API issues, etc.)
+  if [[ -n "${codex_stderr}" ]]; then
+    echo "Warning: Codex API errors during commit message generation:" >&2
+    echo "${codex_stderr}" >&2
+  fi
+
   # Fallback if Codex fails or returns empty
   if [[ -z "${ai_msg}" ]]; then
+    echo "Warning: Codex did not generate a commit message. Using fallback." >&2
     local files_changed
     files_changed="$(git diff --cached --name-only | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')"
     echo "chore(review): codex autofix [modified: ${files_changed}]"
@@ -170,13 +211,51 @@ generate_ai_commit_message() {
   fi
 }
 
+validate_session_id_format() {
+  local session_id="$1"
+  # Session IDs should be alphanumeric with hyphens, underscores, or periods
+  # Typical format: alphanumeric-alphanumeric or UUID-like
+  # Examples: "mock-session-12345", "abc123-def456", "550e8400-e29b-41d4-a716-446655440000"
+  if [[ "${session_id}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{3,127}$ ]]; then
+    return 0
+  fi
+  return 1
+}
+
 capture_session_id() {
   local log_file="$1"
   local session_id
-  session_id="$(awk 'tolower($0) ~ /session id:/ {print $3}' "${log_file}" | tail -n 1)"
+
+  # More robust pattern matching that extracts the ID after "session id:" regardless of field position
+  # Handles variations like "Session ID:", "SESSION ID:", "session id:", etc.
+  session_id="$(awk '
+    tolower($0) ~ /session id:/ {
+      # Find the position of "id:" and extract everything after it
+      match(tolower($0), /id:[[:space:]]*/)
+      if (RSTART > 0) {
+        # Extract from after "id:" to the end, trim whitespace
+        remainder = substr($0, RSTART + RLENGTH)
+        # Extract first word (session ID) by removing leading/trailing spaces and taking first field
+        gsub(/^[[:space:]]+/, "", remainder)
+        split(remainder, arr, /[[:space:]]+/)
+        if (arr[1] != "") {
+          print arr[1]
+        }
+      }
+    }
+  ' "${log_file}" | tail -n 1)"
 
   if [[ -z "${session_id}" ]]; then
     echo "Error: Could not parse session ID from Codex output." >&2
+    echo "Codex output was:" >&2
+    cat "${log_file}" >&2
+    return 1
+  fi
+
+  # Validate session ID format to prevent capturing garbage
+  if ! validate_session_id_format "${session_id}"; then
+    echo "Error: Extracted session ID '${session_id}' does not match expected format." >&2
+    echo "Expected format: alphanumeric with hyphens/underscores, 4-128 characters." >&2
     echo "Codex output was:" >&2
     cat "${log_file}" >&2
     return 1
@@ -306,6 +385,17 @@ apply_codex_fixes() {
   codex exec --full-auto resume "${LAST_REVIEW_SESSION_ID}" "${APPLY_FIXES_PROMPT}" 2>&1
 }
 
+is_ci_environment() {
+  # Detect common CI environment variables
+  if [[ -n "${CI:-}" ]] || [[ -n "${CONTINUOUS_INTEGRATION:-}" ]] || \
+     [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${GITLAB_CI:-}" ]] || \
+     [[ -n "${CIRCLECI:-}" ]] || [[ -n "${TRAVIS:-}" ]] || \
+     [[ -n "${JENKINS_URL:-}" ]] || [[ -n "${BUILDKITE:-}" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 confirm_codex_deletions() {
   local deleted_before="$1"
   local deleted_after="$2"
@@ -325,6 +415,15 @@ confirm_codex_deletions() {
     return 0
   fi
 
+  # Auto-approve in CI environments with a warning
+  if is_ci_environment; then
+    echo "Warning: Running in CI environment. Auto-approving Codex file deletions."
+    echo "Set AUTO_APPROVE_DELETIONS=false to override this behavior and fail in CI instead."
+    echo "Deleted files:"
+    echo "${newly_deleted}"
+    return 0
+  fi
+
   echo "Codex removed the following tracked files while applying fixes:"
   echo "${newly_deleted}"
   echo "These deletions need your approval before continuing."
@@ -338,7 +437,8 @@ confirm_codex_deletions() {
   confirm="$(to_lowercase "${confirm:-}")"
 
   if [[ "${read_status}" -ne 0 ]]; then
-    echo "No input received (non-interactive stdin). Defaulting to restoring deletions."
+    echo "Warning: No input received (non-interactive stdin). Restoring deletions to be safe."
+    echo "To auto-approve deletions in non-interactive mode, set AUTO_APPROVE_DELETIONS=true."
     confirm="n"
   fi
 
@@ -400,21 +500,23 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
 
   echo "Changes detected from Codex; committing..."
 
+  # Check for new untracked files created by Codex before staging
+  untracked_files="$(git ls-files --others --exclude-standard)"
+  should_include_untracked="${INCLUDE_UNTRACKED}"
+
+  if [[ -n "${untracked_files}" ]] && [[ "${INCLUDE_UNTRACKED}" != "true" ]]; then
+    echo "Warning: Codex created new files, but INCLUDE_UNTRACKED=false:"
+    echo "${untracked_files}"
+    echo "Auto-enabling INCLUDE_UNTRACKED for this iteration to maintain consistency."
+    echo "To suppress this, set INCLUDE_UNTRACKED=true or manually handle new files."
+    should_include_untracked="true"
+  fi
+
   # Stage modified and deleted files (and optionally new files)
-  if [[ "${INCLUDE_UNTRACKED}" == "true" ]]; then
+  if [[ "${should_include_untracked}" == "true" ]]; then
     git add -A
   else
     git add -u
-  fi
-
-  # Check for new untracked files created by Codex
-  untracked_files="$(git ls-files --others --exclude-standard)"
-  if [[ -n "${untracked_files}" ]]; then
-    if [[ "${INCLUDE_UNTRACKED}" != "true" ]]; then
-      echo "Warning: Codex created new files that will not be auto-committed (INCLUDE_UNTRACKED=false):"
-      echo "${untracked_files}"
-      echo "Review these files and commit manually if needed."
-    fi
   fi
 
   # Double-check we actually staged something (paranoid but safe)
@@ -423,10 +525,16 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
     exit 0
   fi
 
-  # Generate AI commit message
-  echo "Generating AI commit message..."
-  ai_commit_msg="$(generate_ai_commit_message)"
-  
+  # Generate AI commit message only if needed (template contains %s or no custom template set)
+  ai_commit_msg=""
+  commit_template="${AUTOFIX_COMMIT_MESSAGE:-}"
+  if [[ -z "${commit_template}" ]] || [[ "${commit_template}" == *"%s"* ]]; then
+    echo "Generating AI commit message..."
+    ai_commit_msg="$(generate_ai_commit_message)"
+  else
+    echo "Using custom commit message template (skipping AI generation)."
+  fi
+
   # Use resolve_commit_message to respect templates, passing AI msg as summary
   git commit -m "$(resolve_commit_message "${i}" "${ai_commit_msg}")"
   echo "Committed Codex fixes for iteration ${i}."
