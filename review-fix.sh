@@ -112,11 +112,8 @@ sanitize_format_string() {
   printf '%s' "$1" | sed 's/%/%%/g'
 }
 
-resolve_commit_message() {
-  local iteration="$1"
-  local changes_summary="${2:-}"
+get_autofix_commit_template() {
   local template=""
-
   if [[ -n "${AUTOFIX_COMMIT_MESSAGE}" ]]; then
     template="${AUTOFIX_COMMIT_MESSAGE}"
   elif [[ -n "${COMMIT_RULES_DOC}" ]]; then
@@ -138,7 +135,19 @@ resolve_commit_message() {
   fi
 
   if [[ -z "${template}" ]]; then
-    template="chore(review): codex /review autofix iteration %d %s"
+    template="chore(review): codex /review autofix iteration %d"
+  fi
+
+  echo "${template}"
+}
+
+resolve_commit_message() {
+  local iteration="$1"
+  local changes_summary="${2:-}"
+  local template="${3:-}"
+
+  if [[ -z "${template}" ]]; then
+    template="$(get_autofix_commit_template)"
   fi
 
   # Sanitize changes_summary to prevent format string injection
@@ -507,8 +516,9 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
   if [[ -n "${untracked_files}" ]] && [[ "${INCLUDE_UNTRACKED}" != "true" ]]; then
     echo "Warning: Codex created new files, but INCLUDE_UNTRACKED=false:"
     echo "${untracked_files}"
-    echo "Auto-enabling INCLUDE_UNTRACKED for this iteration to maintain consistency."
+    echo "Auto-enabling INCLUDE_UNTRACKED for this and subsequent iterations to maintain consistency."
     echo "To suppress this, set INCLUDE_UNTRACKED=true or manually handle new files."
+    INCLUDE_UNTRACKED="true"
     should_include_untracked="true"
   fi
 
@@ -525,18 +535,18 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
     exit 0
   fi
 
-  # Generate AI commit message only if needed (template contains %s or no custom template set)
+  # Generate AI commit message only if needed (template contains %s)
   ai_commit_msg=""
-  commit_template="${AUTOFIX_COMMIT_MESSAGE:-}"
-  if [[ -z "${commit_template}" ]] || [[ "${commit_template}" == *"%s"* ]]; then
+  commit_template="$(get_autofix_commit_template)"
+  if [[ "${commit_template}" == *"%s"* ]]; then
     echo "Generating AI commit message..."
     ai_commit_msg="$(generate_ai_commit_message)"
   else
-    echo "Using custom commit message template (skipping AI generation)."
+    echo "Using commit message template without summary placeholder (skipping AI generation)."
   fi
 
   # Use resolve_commit_message to respect templates, passing AI msg as summary
-  git commit -m "$(resolve_commit_message "${i}" "${ai_commit_msg}")"
+  git commit -m "$(resolve_commit_message "${i}" "${ai_commit_msg}" "${commit_template}")"
   echo "Committed Codex fixes for iteration ${i}."
 done
 
