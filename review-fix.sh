@@ -118,6 +118,11 @@ sanitize_format_string() {
   printf '%s' "$1" | sed 's/%/%%/g'
 }
 
+sanitize_commit_summary() {
+  # Collapse newlines and excess whitespace to keep commit messages single-line and safe
+  printf '%s' "$1" | tr '\r\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
+}
+
 get_autofix_commit_template() {
   local template=""
   if [[ -n "${AUTOFIX_COMMIT_MESSAGE}" ]]; then
@@ -195,7 +200,7 @@ generate_ai_commit_message() {
     return
   fi
 
-  # Ask Codex to generate a commit message using heredoc to avoid command-line limits
+  # Ask Codex to generate a commit message via stdin to avoid shell interpolation
   # Capture stderr to detect authentication or API errors
   local ai_msg
   local codex_stderr
@@ -203,10 +208,7 @@ generate_ai_commit_message() {
   codex_tmpfile="$(mktemp)"
   trap 'rm -f "${codex_tmpfile}"' EXIT INT TERM
 
-  ai_msg="$(codex exec "Generate a concise, one-line commit message for these changes. Follow conventional commits format (e.g. fix: ..., feat: ...). Output ONLY the message text, no quotes or markdown." 2>"${codex_tmpfile}" <<EOF
-${diff_content}
-EOF
-)"
+  ai_msg="$(printf '%s' "${diff_content}" | codex exec "Generate a concise, one-line commit message for these changes. Follow conventional commits format (e.g. fix: ..., feat: ...). Output ONLY the message text, no quotes or markdown." 2>"${codex_tmpfile}")"
 
   codex_stderr="$(cat "${codex_tmpfile}")"
   rm -f "${codex_tmpfile}"
@@ -572,6 +574,7 @@ for ((i=1; i<=MAX_LOOPS; i++)); do
       echo "Generating AI commit message (set DISABLE_AI_COMMIT_MESSAGES=true to skip Codex API calls)..."
       ai_commit_msg="$(generate_ai_commit_message)"
     fi
+    ai_commit_msg="$(sanitize_commit_summary "${ai_commit_msg}")"
   else
     echo "Using commit message template without summary placeholder (skipping AI generation)."
   fi
