@@ -146,7 +146,7 @@ get_autofix_commit_template() {
   fi
 
   if [[ -z "${template}" ]]; then
-    template="chore(review): codex /review autofix iteration %d"
+    template="chore(review): %s (iteration %d)"
   fi
 
   echo "${template}"
