@@ -44,10 +44,12 @@ Configure the script using environment variables:
 |----------|---------|-------------|
 | `MAX_LOOPS` | `10` | Maximum review/fix iterations |
 | `CODEX_MODEL` | `gpt-5-codex-high` | Codex model to use |
-| `AUTOFIX_COMMIT_MESSAGE` | `chore(review): codex /review autofix iteration %d` | Commit message template (`%d` = iteration number; `%s` = summary, optional) |
+| `AUTOFIX_COMMIT_MESSAGE` | `chore(review): %s (iteration %d)` | Commit message template (`%d` = iteration number; `%s` = summary, optional) |
 | `COMMIT_RULES_DOC` | - | Path to doc defining `autofix_commit_message:` |
 | `APPLY_FIXES_PROMPT` | `Apply the fixes suggested above` | Prompt passed to Codex when resuming a session |
 | `INCLUDE_UNTRACKED` | `false` | Include untracked files in auto-commits (`true` uses `git add -A` to capture deletions and new files) |
+| `DISABLE_AI_COMMIT_MESSAGES` | `false` | Skip Codex API calls for commit messages (forces template-only commits) |
+| `AI_COMMIT_MAX_DIFF_BYTES` | `50000` | Max diff size before falling back to a simple commit message |
 | `AUTO_APPROVE_DELETIONS` | `false` | Automatically accept Codex deletions without prompting (useful for CI) |
 
 ### Review Presets
@@ -123,7 +125,7 @@ MAX_LOOPS=25 CODEX_MODEL=gpt-5-codex-high ./review-fix.sh
 ### Untracked Files Auto-Inclusion
 
 - When `INCLUDE_UNTRACKED=true`, the script stages with `git add -A` so Codex-created deletions and new files are both captured.
-- **New behavior**: If Codex creates new files when `INCLUDE_UNTRACKED=false`, the script automatically enables `INCLUDE_UNTRACKED` for that iteration to maintain consistency. This prevents scenarios where Codex creates files that never get committed, causing repeated iterations.
+- When `INCLUDE_UNTRACKED=false` and Codex creates new files, the script prompts to include them; if you accept, it flips `INCLUDE_UNTRACKED` to `true` for subsequent iterations. In non-interactive shells, new files are left untracked and must be staged manually.
 
 ### File Deletion Approval
 
@@ -161,6 +163,18 @@ To avoid AI commit message generation:
 ```bash
 # Use a fixed template without %s placeholder
 AUTOFIX_COMMIT_MESSAGE="fix: auto-review iteration %d" ./review-fix.sh
+
+# Or disable Codex commit generation entirely
+DISABLE_AI_COMMIT_MESSAGES=true ./review-fix.sh
+
+# For custom templates with summaries
+AUTOFIX_COMMIT_MESSAGE="feat: codex fixes %d (%s)" ./review-fix.sh
+```
+
+To control API size limits for commit generation:
+
+```bash
+AI_COMMIT_MAX_DIFF_BYTES=75000 ./review-fix.sh
 ```
 
 ## How It Works
